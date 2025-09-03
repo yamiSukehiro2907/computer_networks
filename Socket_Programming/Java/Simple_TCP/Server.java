@@ -16,10 +16,10 @@ public class Server {
             Socket connection = serverSocket.accept();
             System.out.println("Client Connected");
 
-            try (Scanner sc = new Scanner(connection.getInputStream())) {
+            try (Scanner sc = new Scanner(connection.getInputStream())) { // it initializes an input stream to Scanner object
 
                 while (true) {
-                    String data = sc.nextLine();
+                    String data = sc.nextLine(); // the data which comes through that stream
                     if (Objects.equals(data, "End")) {
                         System.out.println("Closing Connection" + connection.getPort());
                         break;
@@ -29,7 +29,7 @@ public class Server {
                 }
             }
             finally {
-                if(connection != null && !connection.isClosed()){
+                if(connection != null && !connection.isClosed()){ // make sure to close the connection to prevent memory leakage
                     connection.close();
                 }
             }

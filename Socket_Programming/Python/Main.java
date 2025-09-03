@@ -40,7 +40,7 @@ public class Main {
         return head;
     }
 
-    class Solution {
+    static class Solution {
         public Node swapKth(Node head, int k) {
             if (head == null || head.next == null)
                 return head;
