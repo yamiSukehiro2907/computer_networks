@@ -1,34 +1,118 @@
 package Socket_Programming.Practice.Chat;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Scanner;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
-public class Server {
+@Getter
+@Setter
+public class Server extends Thread {
 
-    private final Integer port;
+    private final int PORT;
 
     private final String ipAddress;
 
-    private ServerSocket serverSocket;
+    private ReentrantLock lock;
 
-    public Server(String ipAddress, int port) {
-        this.port = port;
+    private final String groupName;
+
+    private ConcurrentHashMap<Integer, SocketPair> connections;
+
+    public Server(String ipAddress, int PORT, String groupName) {
         this.ipAddress = ipAddress;
+        this.PORT = PORT;
+        this.groupName = groupName;
+        this.lock = new ReentrantLock();
+        this.connections = new ConcurrentHashMap<>();
     }
 
-    public void startServer() {
+    private Long lastMessageTimestamp;
+
+    @Override
+    public void run() {
         try {
-            serverSocket = new ServerSocket();
-
-            serverSocket.bind(new InetSocketAddress(ipAddress, port));
-
+            startServer();
+            Thread.sleep(1000);
         } catch (Exception e) {
-            System.out.println(e.getMessage());
+            throw new RuntimeException(e);
+        }
+        while (true) {
+            try {
+                Socket connection = serverSocket.accept();
+                connections.put(connection.getPort(), new SocketPair(connection, new PrintWriter(connection.getOutputStream(), true)));
+                new Thread(() -> {
+                    try {
+                        handleClient(connection);
+                    } catch (Exception e) {
+                        System.out.println(e.getMessage());
+                    }
+                }).start();
+            } catch (Exception e) {
+                System.out.println(e.getMessage());
+                throw new RuntimeException(e);
+            }
         }
     }
 
-    public void stopServer() throws IOException {
+    private void handleClient(Socket connection) {
+        try (Scanner scanner = new Scanner(connection.getInputStream())) {
+            while (!connection.isClosed() && scanner.hasNextLine()) {
+                String message = scanner.nextLine();
+                lock.lock();
+                System.out.println(connection.getPort() + ": " + message);
+                sendMessages(message, connection.getPort());
+                lock.unlock();
+            }
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+        } finally {
+            try {
+                if (connection != null && !connection.isClosed()) {
+                    connection.close();
+                }
+            } catch (IOException e) {
+                System.out.println("Error in closing connection from client : " + connection.getPort());
+
+            }
+        }
+    }
+
+    private ServerSocket serverSocket;
+
+    private void startServer() throws IOException {
+        this.serverSocket = new ServerSocket();
+        serverSocket.bind(new InetSocketAddress(ipAddress, PORT));
+        System.out.println("Server is now live...");
+    }
+
+    private void close() throws IOException {
         serverSocket.close();
     }
+
+    private void sendMessages(String message, int PORT) throws IOException {
+        for (Integer port : connections.keySet()) {
+            if (port != PORT) {
+                connections.get(port).printer.println(port + " : " + message);
+            }
+        }
+    }
+
+    private static class SocketPair {
+        PrintWriter printer;
+        Socket connection;
+
+        public SocketPair(Socket connection, PrintWriter printWriter) {
+            this.printer = printWriter;
+            this.connection = connection;
+        }
+    }
+
 }
