@@ -1,36 +1,53 @@
 package Socket_Programming.Practice.Chat;
 
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Scanner;
 
 public class Client2 {
     public static void main(String[] args) {
+
         String ipAddress = "127.0.0.1";
         int port = 12345;
+
         try (Socket socket = new Socket()) {
 
+            Thread.sleep(1000);
+
+            System.out.println(socket.getLocalPort() + " is trying to join the group " + socket.getPort());
+
             socket.connect(new InetSocketAddress(ipAddress, port));
-            Scanner sc = new Scanner(System.in);
 
-            while (true) {
+            PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
 
-                String message = sc.nextLine();
-                System.out.println(port + " : " + message);
-                socket.getOutputStream().write((message + "\n").getBytes());
-                socket.getOutputStream().flush();
+            Scanner messageGetterScanner = new Scanner(socket.getInputStream());
 
-                try (Scanner scanner = new Scanner(socket.getInputStream())) {
-                    String data = scanner.nextLine();
-                    System.out.println(data);
+            Scanner messageSenderScanner = new Scanner(System.in);
+
+            new Thread(() -> {
+                try {
+                    while (messageGetterScanner.hasNextLine()) {
+                        String incomingMessage = messageGetterScanner.nextLine();
+                        System.out.println(incomingMessage);
+                    }
+                } catch (Exception e) {
+                    System.out.println("Connection to server closed...." + e.getMessage());
                 }
+            }).start();
+
+            while (messageSenderScanner.hasNextLine()) {
+                String message = messageSenderScanner.nextLine();
+                System.out.println(socket.getPort());
+                writer.println(message);
             }
-        } catch (RuntimeException | IOException e) {
 
-            System.out.println(e.getMessage());
+        } catch (IOException e) {
+            System.out.println("An Error occurred : " + e.getMessage());
+
+        } catch (InterruptedException e) {
             throw new RuntimeException(e);
-
         }
     }
 }

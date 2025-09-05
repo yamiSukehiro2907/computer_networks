@@ -48,6 +48,7 @@ public class Server extends Thread {
             try {
                 Socket connection = serverSocket.accept();
                 connections.put(connection.getPort(), new SocketPair(connection, new PrintWriter(connection.getOutputStream(), true)));
+                System.out.println(connection.getPort() + " has joined the group.");
                 new Thread(() -> {
                     try {
                         handleClient(connection);
@@ -64,7 +65,7 @@ public class Server extends Thread {
 
     private void handleClient(Socket connection) {
         try (Scanner scanner = new Scanner(connection.getInputStream())) {
-            while (!connection.isClosed() && scanner.hasNextLine()) {
+            while (!connection.isClosed()) {
                 String message = scanner.nextLine();
                 lock.lock();
                 System.out.println(connection.getPort() + ": " + message);
@@ -72,7 +73,7 @@ public class Server extends Thread {
                 lock.unlock();
             }
         } catch (Exception e) {
-            System.out.println(e.getMessage());
+            System.out.println(connection.getPort() + " is now offline...");
         } finally {
             try {
                 if (connection != null && !connection.isClosed()) {
@@ -90,7 +91,7 @@ public class Server extends Thread {
     private void startServer() throws IOException {
         this.serverSocket = new ServerSocket();
         serverSocket.bind(new InetSocketAddress(ipAddress, PORT));
-        System.out.println("Server is now live...");
+        System.out.println("Group created " + groupName);
     }
 
     private void close() throws IOException {
@@ -100,7 +101,15 @@ public class Server extends Thread {
     private void sendMessages(String message, int PORT) throws IOException {
         for (Integer port : connections.keySet()) {
             if (port != PORT) {
-                connections.get(port).printer.println(port + " : " + message);
+                SocketPair socketPair = connections.get(port);
+                if (socketPair != null) {
+                    try {
+                        socketPair.printer.println(port + " : " + message);
+                    } catch (Exception e) {
+                        System.out.println("Error sending the message to the client: " + port + e.getMessage());
+                        connections.remove(port);
+                    }
+                }
             }
         }
     }
