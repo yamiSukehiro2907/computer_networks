@@ -1,4 +1,4 @@
-package Assignments.Client_Server_basic;
+package Assignments.client_server_basic_tcp;
 
 /**
  * Server Class - Single-Threaded TCP Socket Server
