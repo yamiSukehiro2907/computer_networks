@@ -1,0 +1,711 @@
+// Server.java - Enhanced with feedback improvements
+package HTTP.Server;
+
+import HTTP.Server.Details.Method;
+import HTTP.Server.Details.Request;
+import HTTP.Server.Details.Response;
+
+import java.io.*;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.logging.Logger;
+import java.util.logging.Level;
+
+public class Server {
+    private static final Logger LOGGER = Logger.getLogger(Server.class.getName());
+    private final int PORT;
+    private final String ipAddress;
+    private ServerSocket serverSocket;
+    private final int MAX_REQUEST_SIZE;
+    private static final String RESOURCES_FOLDER = "resources";
+    private static final int DEFAULT_QUEUE_SIZE = 5;
+    private static final int SOCKET_TIMEOUT = 10000; // 10 seconds
+
+    public Server(String ipAddress, int PORT, int MAX_REQUEST_SIZE) {
+        this.PORT = PORT;
+        this.ipAddress = ipAddress;
+        this.MAX_REQUEST_SIZE = MAX_REQUEST_SIZE;
+
+        // Enhanced: Runtime validation of resources directory
+        validateResourcesDirectory();
+    }
+
+    private void validateResourcesDirectory() {
+        Path resourcesDir = Paths.get(RESOURCES_FOLDER);
+        if (!Files.exists(resourcesDir)) {
+            LOGGER.severe("Error: Resources directory '" + RESOURCES_FOLDER + "' not found!");
+            LOGGER.severe("Please create the resources directory and add HTML files.");
+            throw new IllegalStateException("Resources directory not found: " + RESOURCES_FOLDER);
+        }
+        if (!Files.isDirectory(resourcesDir)) {
+            LOGGER.severe("Error: '" + RESOURCES_FOLDER + "' exists but is not a directory!");
+            throw new IllegalStateException("Resources path is not a directory: " + RESOURCES_FOLDER);
+        }
+        if (!Files.isReadable(resourcesDir)) {
+            LOGGER.severe("Error: Resources directory '" + RESOURCES_FOLDER + "' is not readable!");
+            throw new IllegalStateException("Resources directory is not readable: " + RESOURCES_FOLDER);
+        }
+    }
+
+    public void run() throws InterruptedException {
+        startServer();
+
+        // Add shutdown hook for graceful server shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            LOGGER.info("Shutting down server...");
+            try {
+                if (serverSocket != null && !serverSocket.isClosed()) {
+                    serverSocket.close();
+                }
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Error closing server socket", e);
+            }
+        }));
+
+        LOGGER.info("HTTP Server started on http://" + ipAddress + ":" + PORT);
+        LOGGER.info("Serving files from '" + RESOURCES_FOLDER + "' directory");
+        LOGGER.info("Press Ctrl+C to stop the server");
+
+        // Single-threaded connection handling
+        while (!serverSocket.isClosed()) {
+            try (Socket connection = serverSocket.accept();
+                 BufferedReader bufferedReader = new BufferedReader(
+                     new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+                 OutputStream outputStream = connection.getOutputStream()) {
+
+                connection.setSoTimeout(SOCKET_TIMEOUT);
+
+                // Log incoming connection
+                String clientIP = connection.getInetAddress().getHostAddress();
+                int clientPort = connection.getPort();
+                LOGGER.info("Connection from " + clientIP + ":" + clientPort);
+
+                // Read request with enhanced handling
+                String requestString = readRequest(bufferedReader);
+                Request request = parseRequest(requestString);
+
+                // Log the request
+                logRequest(request);
+
+                Response response = generateResponse(request);
+
+                // Log the response
+                logResponse(request, response);
+
+                // Send response
+                byte[] responseBytes = response.getResponseString().getBytes(StandardCharsets.UTF_8);
+                outputStream.write(responseBytes);
+                outputStream.flush();
+
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Error handling client connection", e);
+            }
+        }
+    }
+
+    private String readRequest(BufferedReader reader) throws IOException {
+        StringBuilder requestBuilder = new StringBuilder();
+        char[] buffer = new char[1024];
+        int totalRead = 0;
+
+        // Read until we find the end of headers (\r\n\r\n) or reach max size
+        while (totalRead < MAX_REQUEST_SIZE) {
+            int bytesRead = reader.read(buffer, 0, Math.min(buffer.length, MAX_REQUEST_SIZE - totalRead));
+            if (bytesRead == -1) {
+                break;
+            }
+
+            String chunk = new String(buffer, 0, bytesRead);
+            requestBuilder.append(chunk);
+            totalRead += bytesRead;
+
+            // Enhanced: Handle different line ending combinations
+            String currentContent = requestBuilder.toString();
+            if (currentContent.contains("\r\n\r\n") ||
+                currentContent.contains("\n\n") ||
+                currentContent.contains("\r\r")) {
+                break;
+            }
+        }
+
+        return requestBuilder.toString();
+    }
+
+    private void startServer() {
+        try {
+            this.serverSocket = new ServerSocket(PORT, DEFAULT_QUEUE_SIZE,
+                                               java.net.InetAddress.getByName(ipAddress));
+            LOGGER.info("Server socket created and bound to " + ipAddress + ":" + PORT);
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "Error creating ServerSocket", e);
+            System.exit(1);
+        }
+    }
+
+    private Request parseRequest(String requestString) {
+        if (requestString == null || requestString.trim().isEmpty()) {
+            LOGGER.warning("Received empty or null request");
+            return null;
+        }
+
+        try {
+            // Enhanced: Handle different line ending types more robustly
+            String[] lines = requestString.split("\\r?\\n|\\r");
+            if (lines.length == 0) {
+                LOGGER.warning("No lines found in request");
+                return null;
+            }
+
+            String requestLine = lines[0].trim();
+            if (requestLine.isEmpty()) {
+                LOGGER.warning("Empty request line");
+                return null;
+            }
+
+            String[] requestLineParts = requestLine.split("\\s+");
+            if (requestLineParts.length != 3) {
+                LOGGER.warning("Invalid request line format: " + requestLine);
+                return null;
+            }
+
+            Method method = Method.fromString(requestLineParts[0]);
+            String path = requestLineParts[1];
+            String httpVersion = requestLineParts[2];
+
+            // Enhanced validation
+            if (method == null) {
+                LOGGER.warning("Unknown HTTP method: " + requestLineParts[0]);
+                return null;
+            }
+
+            if (path == null || path.trim().isEmpty()) {
+                LOGGER.warning("Empty or null path");
+                return null;
+            }
+
+            if (httpVersion == null || httpVersion.trim().isEmpty()) {
+                LOGGER.warning("Empty or null HTTP version");
+                return null;
+            }
+
+            // Validate HTTP version format
+            if (!httpVersion.matches("HTTP/[0-9]+\\.[0-9]+")) {
+                LOGGER.warning("Invalid HTTP version format: " + httpVersion);
+                return null;
+            }
+
+            // URL decode the path safely
+            try {
+                path = java.net.URLDecoder.decode(path, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "Failed to decode URL path: " + path, e);
+                // Continue with original path if decoding fails
+            }
+
+            return new Request(httpVersion, method, path);
+
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to parse request: " + requestString, e);
+            return null;
+        }
+    }
+
+    private Response generateResponse(Request request) {
+        // Handle malformed requests
+        if (request == null || request.getHttpVersion() == null ||
+            request.getPath() == null || request.getMethod() == null) {
+            return createErrorResponse("HTTP/1.1", 400, "Bad Request",
+                                     "The request was malformed or incomplete.");
+        }
+
+        // Handle non-GET methods
+        if (request.getMethod() != Method.GET) {
+            return createErrorResponse(request.getHttpVersion(), 405, "Method Not Allowed",
+                                     "Only GET requests are allowed.");
+        }
+
+        // Process the request path
+        String requestPath = request.getPath();
+
+        // Handle root path
+        if (requestPath.equals("/")) {
+            requestPath = "/index.html";
+        }
+
+        try {
+            // Remove leading slash and construct file path
+            String filePath = requestPath.startsWith("/") ? requestPath.substring(1) : requestPath;
+            Path resourcesPath = Paths.get(RESOURCES_FOLDER).toAbsolutePath().normalize();
+            Path requestedPath = resourcesPath.resolve(filePath).normalize();
+
+            // Enhanced security check with detailed logging
+            if (!requestedPath.startsWith(resourcesPath)) {
+                LOGGER.warning("Path traversal attempt detected: " + request.getPath() +
+                             " -> " + requestedPath.toString());
+                return createErrorResponse(request.getHttpVersion(), 403, "Forbidden",
+                                         "Access to the requested resource is forbidden.");
+            }
+
+            // Check if file exists and is readable
+            if (!Files.exists(requestedPath)) {
+                LOGGER.info("File not found: " + requestedPath.toString());
+                return createErrorResponse(request.getHttpVersion(), 404, "Not Found",
+                                         "The requested resource could not be found.");
+            }
+
+            if (!Files.isRegularFile(requestedPath)) {
+                LOGGER.warning("Requested path is not a regular file: " + requestedPath.toString());
+                return createErrorResponse(request.getHttpVersion(), 404, "Not Found",
+                                         "The requested resource could not be found.");
+            }
+
+            if (!Files.isReadable(requestedPath)) {
+                LOGGER.warning("File is not readable: " + requestedPath.toString());
+                return createErrorResponse(request.getHttpVersion(), 403, "Forbidden",
+                                         "Access to the requested resource is forbidden.");
+            }
+
+            // Read and serve the file
+            return readFile(request, requestedPath);
+
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "Error processing request for path: " + requestPath, e);
+            return createErrorResponse(request.getHttpVersion(), 500, "Internal Server Error",
+                                     "An internal server error occurred.");
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Unexpected error processing request: " + requestPath, e);
+            return createErrorResponse(request.getHttpVersion(), 500, "Internal Server Error",
+                                     "An unexpected error occurred.");
+        }
+    }
+
+    private Response createErrorResponse(String httpVersion, int statusCode, String statusMessage, String description) {
+        String content = generateErrorPage(statusCode, statusMessage, description);
+        return new Response(httpVersion, statusCode, statusMessage, "text/html; charset=utf-8",
+                          content.getBytes(StandardCharsets.UTF_8).length, content);
+    }
+
+    private String generateErrorPage(int statusCode, String statusMessage, String description) {
+        return String.format("""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>%d %s</title>
+                <style>
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        margin: 40px auto;
+                        max-width: 800px;
+                        background-color: #f5f5f5;
+                        color: #333;
+                    }
+                    .container {
+                        background: white;
+                        padding: 40px;
+                        border-radius: 8px;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    }
+                    h1 {
+                        color: #d32f2f;
+                        font-size: 2.5em;
+                        margin-bottom: 0.5em;
+                    }
+                    p {
+                        font-size: 1.1em;
+                        line-height: 1.6;
+                        margin-bottom: 1em;
+                    }
+                    hr {
+                        margin: 30px 0;
+                        border: none;
+                        border-top: 1px solid #eee;
+                    }
+                    .footer {
+                        color: #666;
+                        font-style: italic;
+                        text-align: center;
+                    }
+                    .error-code {
+                        font-family: 'Courier New', monospace;
+                        font-size: 1.2em;
+                        font-weight: bold;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1><span class="error-code">%d</span> %s</h1>
+                    <p>%s</p>
+                    <hr>
+                    <p class="footer">Simple HTTP Server</p>
+                </div>
+            </body>
+            </html>""", statusCode, statusMessage, statusCode, statusMessage, description);
+    }
+
+    private Response readFile(Request request, Path filePath) throws IOException {
+        // Determine content type based on file extension
+        String contentType = determineContentType(filePath);
+
+        // Read file content efficiently
+        byte[] fileBytes = Files.readAllBytes(filePath);
+        String fileContent = new String(fileBytes, StandardCharsets.UTF_8);
+
+        LOGGER.info("Successfully served file: " + filePath.getFileName() +
+                   " (" + fileBytes.length + " bytes, " + contentType + ")");
+
+        return new Response(
+            request.getHttpVersion(),
+            200,
+            "OK",
+            contentType,
+            fileBytes.length, // Use actual byte length for content-length
+            fileContent
+        );
+    }
+
+    // Enhanced: Expanded content-type detection
+    private String determineContentType(Path filePath) {
+        String fileName = filePath.getFileName().toString().toLowerCase();
+
+        // Text-based files
+        if (fileName.endsWith(".html") || fileName.endsWith(".htm")) {
+            return "text/html; charset=utf-8";
+        } else if (fileName.endsWith(".css")) {
+            return "text/css; charset=utf-8";
+        } else if (fileName.endsWith(".js")) {
+            return "application/javascript; charset=utf-8";
+        } else if (fileName.endsWith(".json")) {
+            return "application/json; charset=utf-8";
+        } else if (fileName.endsWith(".txt")) {
+            return "text/plain; charset=utf-8";
+        } else if (fileName.endsWith(".xml")) {
+            return "application/xml; charset=utf-8";
+        }
+
+        // Image files
+        else if (fileName.endsWith(".png")) {
+            return "image/png";
+        } else if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
+            return "image/jpeg";
+        } else if (fileName.endsWith(".gif")) {
+            return "image/gif";
+        } else if (fileName.endsWith(".svg")) {
+            return "image/svg+xml";
+        } else if (fileName.endsWith(".ico")) {
+            return "image/x-icon";
+        } else if (fileName.endsWith(".webp")) {
+            return "image/webp";
+        }
+
+        // Font files
+        else if (fileName.endsWith(".woff")) {
+            return "font/woff";
+        } else if (fileName.endsWith(".woff2")) {
+            return "font/woff2";
+        } else if (fileName.endsWith(".ttf")) {
+            return "font/ttf";
+        } else if (fileName.endsWith(".otf")) {
+            return "font/otf";
+        }
+
+        // Other common types
+        else if (fileName.endsWith(".pdf")) {
+            return "application/pdf";
+        } else if (fileName.endsWith(".zip")) {
+            return "application/zip";
+        }
+
+        return "text/html; charset=utf-8"; // Default fallback
+    }
+
+    private void logRequest(Request request) {
+        if (request != null && request.getMethod() != null && request.getPath() != null) {
+            LOGGER.info("Request: " + request.getMethod() + " " + request.getPath() +
+                       " " + request.getHttpVersion());
+        } else {
+            LOGGER.warning("Request: [Malformed request]");
+        }
+    }
+
+    private void logResponse(Request request, Response response) {
+        if (request != null && request.getPath() != null) {
+            String fileName = request.getPath().equals("/") ? "index.html" :
+                            request.getPath().substring(1);
+            if (response.getStatusCode() == 200) {
+                LOGGER.info(" -> " + response.getStatusCode() + " " +
+                           response.getStatusMessage() + ": " + fileName);
+            } else {
+                LOGGER.info(" -> " + response.getStatusCode() + " " +
+                           response.getStatusMessage());
+            }
+        } else {
+            LOGGER.info(" -> " + response.getStatusCode() + " " + response.getStatusMessage());
+        }
+    }
+
+    // Enhanced main method with better error handling and validation
+    public static void main(String[] args) {
+        String host = "127.0.0.1";
+        int port = 8080;
+        int maxRequestSize = 4096;
+
+        // Enhanced command line argument parsing with validation
+        if (args.length > 0) {
+            try {
+                port = Integer.parseInt(args[0]);
+                if (port < 1 || port > 65535) {
+                    LOGGER.severe("Error: Port must be between 1 and 65535");
+                    System.exit(1);
+                }
+            } catch (NumberFormatException e) {
+                LOGGER.severe("Error: Invalid port number: " + args[0]);
+                System.exit(1);
+            }
+        }
+
+        if (args.length > 1) {
+            host = args[1].trim();
+            if (host.isEmpty()) {
+                LOGGER.severe("Error: Host address cannot be empty");
+                System.exit(1);
+            }
+        }
+
+        // Enhanced: Better startup validation
+        try {
+            Server server = new Server(host, port, maxRequestSize);
+            LOGGER.info("Starting server with configuration:");
+            LOGGER.info("  Host: " + host);
+            LOGGER.info("  Port: " + port);
+            LOGGER.info("  Max Request Size: " + maxRequestSize + " bytes");
+            LOGGER.info("  Resources Directory: " + RESOURCES_FOLDER);
+
+            server.run();
+        } catch (IllegalStateException e) {
+            LOGGER.severe("Server startup failed: " + e.getMessage());
+            System.exit(1);
+        } catch (InterruptedException e) {
+            LOGGER.info("Server interrupted");
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Unexpected error during server operation", e);
+            System.exit(1);
+        }
+    }
+}
+
+// Method.java - Enhanced with validation
+package HTTP.Server.Details;
+
+import java.util.Arrays;
+import java.util.Optional;
+
+public enum Method {
+    GET, POST, DELETE, PUT, PATCH, OPTIONS, HEAD, TRACE, CONNECT;
+
+    public static Method fromString(String methodString) {
+        if (methodString == null || methodString.trim().isEmpty()) {
+            return null;
+        }
+
+        String cleanMethod = methodString.trim().toUpperCase();
+
+        // Enhanced: Direct lookup for better performance and validation
+        try {
+            return Method.valueOf(cleanMethod);
+        } catch (IllegalArgumentException e) {
+            // Method not supported
+            return null;
+        }
+    }
+
+    // Enhanced: Check if method is supported by this server
+    public boolean isSupported() {
+        return this == GET; // Only GET is currently supported
+    }
+}
+
+// Request.java - Enhanced with validation
+package HTTP.Server.Details;
+
+public class Request {
+    private Method method;
+    private String path;
+    private String httpVersion;
+
+    public Request(String httpVersion, Method method, String path) {
+        this.httpVersion = httpVersion != null ? httpVersion.trim() : null;
+        this.path = path != null ? path.trim() : null;
+        this.method = method;
+    }
+
+    // Enhanced getters with validation
+    public Method getMethod() {
+        return method;
+    }
+
+    public void setMethod(Method method) {
+        this.method = method;
+    }
+
+    public String getPath() {
+        return path;
+    }
+
+    public void setPath(String path) {
+        this.path = path != null ? path.trim() : null;
+    }
+
+    public String getHttpVersion() {
+        return httpVersion;
+    }
+
+    public void setHttpVersion(String httpVersion) {
+        this.httpVersion = httpVersion != null ? httpVersion.trim() : null;
+    }
+
+    public String getRequestString() {
+        return method + " " + path + " " + getHttpVersion() + "\r\n" + "\r\n";
+    }
+
+    // Enhanced: Validation method
+    public boolean isValid() {
+        return method != null &&
+               path != null && !path.trim().isEmpty() &&
+               httpVersion != null && !httpVersion.trim().isEmpty();
+    }
+
+    // Enhanced: toString for better debugging
+    @Override
+    public String toString() {
+        return String.format("Request{method=%s, path='%s', httpVersion='%s'}",
+                           method, path, httpVersion);
+    }
+}
+
+// Response.java - Enhanced with better formatting
+package HTTP.Server.Details;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+
+public class Response {
+    private String httpVersion;
+    private int statusCode;
+    private String statusMessage;
+    private String contentType;
+    private Date date;
+    private long contentLength;
+    private String content;
+
+    public Response(String httpVersion, int statusCode, String statusMessage,
+                   String contentType, long contentLength, String content) {
+        this.httpVersion = httpVersion;
+        this.statusCode = statusCode;
+        this.statusMessage = statusMessage;
+        this.contentType = contentType;
+        this.date = new Date();
+        this.contentLength = contentLength;
+        this.content = content;
+    }
+
+    // Standard getters and setters
+    public String getHttpVersion() { return httpVersion; }
+    public void setHttpVersion(String httpVersion) { this.httpVersion = httpVersion; }
+
+    public int getStatusCode() { return statusCode; }
+    public void setStatusCode(int statusCode) { this.statusCode = statusCode; }
+
+    public String getStatusMessage() { return statusMessage; }
+    public void setStatusMessage(String statusMessage) { this.statusMessage = statusMessage; }
+
+    public String getContentType() { return contentType; }
+    public void setContentType(String contentType) { this.contentType = contentType; }
+
+    public Date getDate() { return date; }
+    public void setDate(Date date) { this.date = date; }
+
+    public long getContentLength() { return contentLength; }
+    public void setContentLength(long contentLength) { this.contentLength = contentLength; }
+
+    public String getContent() { return content; }
+    public void setContent(String content) { this.content = content; }
+
+    public String getResponseString() {
+        StringBuilder responseBuilder = new StringBuilder();
+
+        // Status line
+        responseBuilder.append(getHttpVersion()).append(" ").append(statusCode)
+                      .append(" ").append(statusMessage).append("\r\n");
+
+        // Headers
+        responseBuilder.append("Content-Type: ").append(contentType).append("\r\n");
+        responseBuilder.append("Content-Length: ").append(contentLength).append("\r\n");
+
+        // Enhanced: Format date in GMT as per HTTP specification
+        SimpleDateFormat dateFormat = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH);
+        dateFormat.setTimeZone(TimeZone.getTimeZone("GMT"));
+        responseBuilder.append("Date: ").append(dateFormat.format(date)).append("\r\n");
+
+        // Enhanced: Additional standard headers
+        responseBuilder.append("Server: Simple HTTP Server/1.1\r\n");
+        responseBuilder.append("Connection: close\r\n");
+
+        // Enhanced: Cache control for better browser behavior
+        if (statusCode >= 400) {
+            responseBuilder.append("Cache-Control: no-cache, no-store, must-revalidate\r\n");
+        } else {
+            responseBuilder.append("Cache-Control: public, max-age=3600\r\n");
+        }
+
+        // End of headers
+        responseBuilder.append("\r\n");
+
+        // Body
+        if (content != null) {
+            responseBuilder.append(content);
+        }
+
+        return responseBuilder.toString();
+    }
+
+    // Enhanced: toString for debugging
+    @Override
+    public String toString() {
+        return String.format("Response{status=%d %s, contentType='%s', length=%d}",
+                           statusCode, statusMessage, contentType, contentLength);
+    }
+}
+
+// Main.java - Enhanced with better configuration
+package HTTP;
+
+import HTTP.Server.Server;
+
+public class Main {
+    public static void main(String[] args) throws InterruptedException {
+        // Enhanced: Use command line arguments if provided
+        if (args.length > 0) {
+            // Delegate to Server's main method for consistent argument handling
+            Server.main(args);
+        } else {
+            // Default configuration
+            int PORT = 8080;
+            String ipAddress = "127.0.0.1";
+            int maxRequestSize = 4096;
+
+            System.out.println("Starting HTTP Server with default configuration...");
+            Server server = new Server(ipAddress, PORT, maxRequestSize);
+            server.run();
+        }
+    }
+}

@@ -3,7 +3,10 @@ package HTTP.Server.Details;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
 
 @Getter
 @Setter
@@ -16,14 +19,13 @@ public class Response {
     private long contentLength;
     private String content;
 
-
-    public Response(String httpVersion, int statusCode, String responseMessage, String contentType, long contentLength, String response) {
+    public Response(String httpVersion, int statusCode, String statusMessage, String contentType, long contentLength, String content) {
         this.HttpVersion = httpVersion;
-        this.statusMessage = responseMessage;
+        this.statusMessage = statusMessage;
         this.contentType = contentType;
         this.date = new Date();
         this.contentLength = contentLength;
-        this.content = response;
+        this.content = content;
         this.statusCode = statusCode;
     }
 
@@ -32,7 +34,12 @@ public class Response {
         responseBuilder.append(getHttpVersion()).append(" ").append(statusCode).append(" ").append(statusMessage).append("\r\n");
         responseBuilder.append("Content-Type: ").append(contentType).append("\r\n");
         responseBuilder.append("Content-Length: ").append(contentLength).append("\r\n");
-        responseBuilder.append("Date: ").append(date).append("\r\n");
+
+        // Format date in GMT as per HTTP specification
+        SimpleDateFormat dateFormat = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH);
+        dateFormat.setTimeZone(TimeZone.getTimeZone("GMT"));
+        responseBuilder.append("Date: ").append(dateFormat.format(date)).append("\r\n");
+
         responseBuilder.append("Server: Simple HTTP Server\r\n");
         responseBuilder.append("Connection: close\r\n");
         responseBuilder.append("\r\n");
